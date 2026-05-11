@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Betrack Pro</title>
+
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet" />
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Roboto', sans-serif; height: 100vh; width: 100vw; background-color: #e5e3df; overflow: hidden; }
+    #map { height: 100%; width: 100%; }
+
+    /* --- PANEL TÉLÉMÉTRIE --- */
+    .search-box {
+      position: absolute; top: 12px; left: 12px; z-index: 10;
+      background: white; width: 340px; padding: 14px 18px; border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.2); display: flex; flex-direction: column; gap: 12px;
+    }
+    .search-header { display: flex; align-items: center; justify-content: space-between; }
+    .brand-name { font-weight: 700; font-size: 15px; color: #202124; }
+    
+    /* Style du statut dynamique */
+    .status-indicator { 
+      display: flex; 
+      align-items: center; 
+      gap: 6px; 
+      font-size: 11px; 
+      font-weight: 700; 
+      transition: color 0.3s ease;
+    }
+    
+    /* Couleurs des états */
+    .status-waiting { color: #f2994a; } /* Orange */
+    .status-live { color: #34a853; }    /* Vert */
+
+    .dot { 
+      width: 8px; 
+      height: 8px; 
+      border-radius: 50%; 
+      animation: pulse 1.5s infinite; 
+    }
+    
+    .dot-waiting { background: #f2994a; }
+    .dot-live { background: #34a853; }
+
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+    .telemetry-row { display: flex; gap: 25px; padding-top: 10px; border-top: 1px solid #f1f3f4; font-size: 13px; color: #70757a; }
+    .telemetry-row b { color: #202124; font-family: 'Roboto Mono', monospace; transition: color 0.3s; }
+    .flash-update { color: #4285F4 !important; }
+
+    /* --- BOUTONS --- */
+    .top-right-controls { position: absolute; top: 12px; right: 12px; z-index: 10; display: flex; flex-direction: column; gap: 12px; }
+    .round-btn { width: 40px; height: 40px; background: white; border-radius: 50%; border: none; box-shadow: 0 2px 4px rgba(0,0,0,0.2); cursor: pointer; display: grid; place-items: center; }
+    .round-btn svg { width: 22px; height: 22px; fill: #5f6368; }
+    .distance-pill { position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%); background: #202124; color: white; padding: 10px 24px; border-radius: 24px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); font-size: 14px; font-weight: 500; z-index: 10; }
+    .bottom-right-controls { position: absolute; right: 12px; bottom: 30px; display: flex; flex-direction: column; gap: 10px; z-index: 10; }
+    .zoom-group { display: flex; flex-direction: column; background: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.2); overflow: hidden; }
+    .zoom-btn { width: 40px; height: 40px; border: none; background: white; cursor: pointer; border-bottom: 1px solid #f1f3f4; display: grid; place-items: center; }
+    .zoom-btn:last-child { border-bottom: none; }
+    .zoom-btn svg { width: 20px; height: 20px; fill: #5f6368; }
+    .recenter-btn { width: 40px; height: 40px; background: white; border: none; cursor: pointer; display: grid; place-items: center; box-shadow: 0 2px 4px rgba(0,0,0,0.2); border-radius: 2px; }
+  </style>
+</head>
+<body>
+
+  <div class="search-box">
+    <div class="search-header">
+      <span class="brand-name">TÉLÉMÉTRIE</span>
+      <div id="statusContainer" class="status-indicator status-waiting">
+        <div id="statusDot" class="dot dot-waiting"></div>
+        <span id="statusTxt">EN ATTENTE</span>
+      </div>
+    </div>
+    <div class="telemetry-row">
+      <span>Latitude: <b id="latD">--</b></span>
+      <span>Longitude: <b id="lngD">--</b></span>
+    </div>
+  </div>
+
+  <div class="top-right-controls">
+    <button class="round-btn" onclick="toggleSatellite()" title="Vue Hybride">
+      <svg viewBox="0 0 24 24"><path d="M12 16L3 10.5 12 5l9 5.5-9 5.5zm0 2.35l-7.75-4.74-.86.53L12 19.5l8.61-5.36-.86-.53L12 18.35zM12 7.1L16.75 10 12 12.9 7.25 10 12 7.1z"/></svg>
+    </button>
+    <button class="round-btn" title="Nord"><svg viewBox="0 0 24 24"><path d="M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z" fill="#EA4335"/></svg></button>
+  </div>
+
+  <div class="distance-pill">Parcours : <b id="totalDist">0.000</b> km</div>
+  <div id="map"></div>
+
+  <div class="bottom-right-controls">
+    <button class="recenter-btn" onclick="recenter()" title="Recentrer">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="#5f6368"><path d="M12 8c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4-1.79-4-4-4zm8.94 3c-.46-4.17-3.77-7.48-7.94-7.94V1h-2v2.06C6.83 3.52 3.52 6.83 3.06 11H1v2h2.06c.46 4.17 3.77 7.48 7.94 7.94V23h2v-2.06c4.17-.46 7.48-3.77 7.94-7.94H23v-2h-2.06z"/></svg>
+    </button>
+    <div class="zoom-group">
+      <button class="zoom-btn" onclick="zoomIn()"><svg viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg></button>
+      <button class="zoom-btn" onclick="zoomOut()"><svg viewBox="0 0 24 24"><path d="M19 13H5v-2h14v2z"/></svg></button>
+    </div>
+  </div>
+
+  <script>
+    const FB_CONFIG = {
+      apiKey: "AIzaSyBadTAQ_urAu0jUkMmHcYifukCCmhL_4vE",
+      authDomain: "animal-tracking-system-170dd.firebaseapp.com",
+      databaseURL: "https://animal-tracking-system-170dd-default-rtdb.firebaseio.com",
+      projectId: "animal-tracking-system-170dd",
+    };
+
+    let gMap, gMarker, gPolyline;
+    let crumbs = [], totalKm = 0, firstFix = true;
+
+    function initMap() {
+      gMap = new google.maps.Map(document.getElementById('map'), {
+        center: { lat: 7.32, lng: 13.58 },
+        zoom: 18,
+        disableDefaultUI: true,
+        mapTypeId: 'roadmap'
+      });
+
+      gPolyline = new google.maps.Polyline({
+        path: [], strokeColor: '#4285F4', strokeWeight: 5, strokeOpacity: 0.6, map: gMap
+      });
+
+      initFirebase();
+    }
+
+    function initFirebase() {
+      firebase.initializeApp(FB_CONFIG);
+      firebase.database().ref('/Animal1/GPS-Data').on('value', snap => {
+        const d = snap.val();
+        if (d && d.Latitude && d.Longitude) {
+          // Si on reçoit des données valides, on change le statut
+          updateStatusToLive();
+          updateTrack(parseFloat(d.Latitude), parseFloat(d.Longitude));
+        }
+      });
+    }
+
+    // Fonction pour changer visuellement le statut
+    function updateStatusToLive() {
+      const container = document.getElementById('statusContainer');
+      const dot = document.getElementById('statusDot');
+      const txt = document.getElementById('statusTxt');
+
+      if (container.classList.contains('status-waiting')) {
+        container.classList.replace('status-waiting', 'status-live');
+        dot.classList.replace('dot-waiting', 'dot-live');
+        txt.textContent = "EN DIRECT";
+      }
+    }
+
+    function updateTrack(lat, lng) {
+      const pos = { lat, lng };
+      document.getElementById('latD').textContent = lat.toFixed(5);
+      document.getElementById('lngD').textContent = lng.toFixed(5);
+      flashCoordinates();
+
+      let heading = 0;
+      if (!firstFix) {
+        const lastPos = crumbs[crumbs.length - 1];
+        if (lastPos.lat !== lat || lastPos.lng !== lng) {
+          heading = google.maps.geometry.spherical.computeHeading(
+            new google.maps.LatLng(lastPos.lat, lastPos.lng),
+            new google.maps.LatLng(lat, lng)
+          );
+          totalKm += haversine(lastPos.lat, lastPos.lng, lat, lng);
+          document.getElementById('totalDist').textContent = totalKm.toFixed(3);
+        }
+      }
+      crumbs.push(pos);
+
+      if (firstFix) {
+        firstFix = false;
+        gMarker = new google.maps.Marker({
+          position: pos, map: gMap,
+          icon: {
+            path: 'M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z',
+            fillColor: '#4285F4', fillOpacity: 1, strokeColor: '#FFFFFF', strokeWeight: 2, scale: 1.8,
+            anchor: new google.maps.Point(12, 12), rotation: heading
+          }
+        });
+        gMap.setCenter(pos);
+      } else {
+        gMarker.setPosition(pos);
+        const icon = gMarker.getIcon();
+        icon.rotation = heading;
+        gMarker.setIcon(icon);
+        gMap.panTo(pos);
+      }
+      gPolyline.setPath(crumbs);
+    }
+
+    function flashCoordinates() {
+      const els = [document.getElementById('latD'), document.getElementById('lngD')];
+      els.forEach(el => { el.classList.add('flash-update'); setTimeout(() => el.classList.remove('flash-update'), 500); });
+    }
+
+    function haversine(lat1, lon1, lat2, lon2) {
+      const R = 6371; 
+      const dLat = (lat2-lat1) * Math.PI/180; const dLon = (lon2-lon1) * Math.PI/180;
+      const a = Math.sin(dLat/2) * Math.sin(dLat/2) + Math.cos(lat1*Math.PI/180) * Math.cos(lat2*Math.PI/180) * Math.sin(dLon/2) * Math.sin(dLon/2);
+      return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)));
+    }
+
+    function zoomIn() { gMap.setZoom(gMap.getZoom() + 1); }
+    function zoomOut() { gMap.setZoom(gMap.getZoom() - 1); }
+    function recenter() { if(gMarker) gMap.panTo(gMarker.getPosition()); }
+    function toggleSatellite() { 
+      const type = gMap.getMapTypeId();
+      gMap.setMapTypeId(type === 'roadmap' ? 'hybrid' : 'roadmap');
+    }
+  </script>
+
+  <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAbm1-GcB_vZ3Fgve8wHHZC0O-dK7RJJ4k&libraries=geometry&callback=initMap" async defer></script>
+</body>
+</html>
